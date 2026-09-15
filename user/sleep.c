@@ -1,3 +1,4 @@
+
 #include "kernel/types.h"
 #include "user/user.h"
 
@@ -9,6 +10,9 @@ main(int argc, char *argv[])
     exit(1);
   }
   int ticks = atoi(argv[1]);
-  pause(ticks);
+if (ticks<0){
+fprintf(2, "sleep:: invalid ticks\n");
+	exit(1);
+}  pause(ticks);
   exit(0);
 }
