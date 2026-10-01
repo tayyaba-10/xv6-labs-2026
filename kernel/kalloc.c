@@ -22,12 +22,31 @@ struct {
   struct spinlock lock;
   struct run *freelist;
 } kmem;
+#define NSUPER 8
+
+struct {
+  struct spinlock lock;
+  struct run *freelist;
+} supermem;
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  initlock(&supermem.lock, "supermem");
+
+  // normal pages from end of kernel up to the first 2MB boundary
+  char *p = (char*)SUPERPGROUNDUP((uint64)end);
+  freerange(end, p);
+
+  // reserve NSUPER chunks of 2MB for superpages
+  for(int i = 0; i < NSUPER; i++){
+    superfree(p);
+    p += SUPERPGSIZE;
+  }
+
+  // everything else is normal 4KB pages
+  freerange(p, (void*)PHYSTOP);
 }
 
 void
@@ -78,5 +97,34 @@ kalloc(void)
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
+  return (void*)r;
+}
+
+void
+superfree(void *pa)
+{
+  struct run *r;
+
+  if(((uint64)pa % SUPERPGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("superfree");
+
+  r = (struct run*)pa;
+  acquire(&supermem.lock);
+  r->next = supermem.freelist;
+  supermem.freelist = r;
+  release(&supermem.lock);
+}
+
+void *
+superalloc(void)
+{
+  struct run *r;
+
+  acquire(&supermem.lock);
+  r = supermem.freelist;
+  if(r)
+    supermem.freelist = r->next;
+  release(&supermem.lock);
+
   return (void*)r;
 }
