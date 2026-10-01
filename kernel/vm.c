@@ -83,7 +83,7 @@ kvminithart()
 // Return the address of the PTE in page table pagetable
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page-table pages.
-//
+///
 // The risc-v Sv39 scheme has three levels of page-table
 // pages. A page-table page contains 512 64-bit PTEs.
 // A 64-bit virtual address is split into five fields:
@@ -92,6 +92,7 @@ kvminithart()
 //   21..29 -- 9 bits of level-1 index.
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
+
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
@@ -101,12 +102,9 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   for(int level = 2; level > 0; level--) {
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
-      pagetable = (pagetable_t)PTE2PA(*pte);
-#ifdef LAB_PGTBL
-      if(PTE_LEAF(*pte)) {
+      if(level == 1 && (*pte & (PTE_R|PTE_W|PTE_X)))
         return pte;
-      }
-#endif
+      pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
@@ -115,6 +113,38 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     }
   }
   return &pagetable[PX(0, va)];
+}
+
+
+static pte_t *
+walk1(pagetable_t pagetable, uint64 va, int alloc)
+{
+  pte_t *pte = &pagetable[PX(2, va)];
+  if(*pte & PTE_V){
+    pagetable = (pagetable_t)PTE2PA(*pte);
+  } else {
+    if(!alloc || (pagetable = (pagetable_t)kalloc()) == 0)
+      return 0;
+    memset(pagetable, 0, PGSIZE);
+    *pte = PA2PTE(pagetable) | PTE_V;
+  }
+  return &pagetable[PX(1, va)];
+}
+
+// Turn the superpage containing va into 512 ordinary pages.
+static int
+demote(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte1 = walk1(pagetable, va, 0);
+  uint64 pa = PTE2PA(*pte1);
+  uint64 flags = PTE_FLAGS(*pte1);
+  pte_t *newpt = (pte_t*)kalloc();
+  if(newpt == 0)
+    return -1;
+  for(int i = 0; i < 512; i++)
+    newpt[i] = PA2PTE(pa + (uint64)i * PGSIZE) | flags;
+  *pte1 = PA2PTE(newpt) | PTE_V;
+  return 0;
 }
 
 // Look up a virtual address, return the physical address,
@@ -193,21 +223,36 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
-  uint64 a;
+  uint64 a, end, step;
   pte_t *pte;
-  int sz;
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
 
-  for(a = va; a < va + npages*PGSIZE; a += sz){
-    sz = PGSIZE;
+  end = va + npages * PGSIZE;
+  for(a = va; a < end; a += step){
+    step = PGSIZE;
+
+    // is this address inside a superpage?
+    pte_t *pte1 = walk1(pagetable, a, 0);
+    if(pte1 && (*pte1 & PTE_V) && (*pte1 & (PTE_R|PTE_W|PTE_X))){
+      if(a % SUPERPGSIZE == 0 && a + SUPERPGSIZE <= end){
+        // unmapping the whole superpage
+        if(do_free)
+          superfree((void*)PTE2PA(*pte1));
+        *pte1 = 0;
+        step = SUPERPGSIZE;
+        continue;
+      }
+      // only part of it: break it into ordinary pages first
+      if(demote(pagetable, a) < 0)
+        panic("uvmunmap: demote");
+    }
+
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0) {
-      printf("va=%ld pte=%ld\n", a, *pte);
+    if((*pte & PTE_V) == 0)
       panic("uvmunmap: not mapped");
-    }
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -255,23 +300,42 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 {
   char *mem;
   uint64 a;
-  int sz;
+  uint64 step;
 
   if(newsz < oldsz)
     return oldsz;
 
   oldsz = PGROUNDUP(oldsz);
-  for(a = oldsz; a < newsz; a += sz){
-    sz = PGSIZE;
+  for(a = oldsz; a < newsz; a += step){
+    step = PGSIZE;
+
+    // try a 2MB superpage if aligned and big enough
+    if(a % SUPERPGSIZE == 0 && a + SUPERPGSIZE <= newsz){
+      mem = superalloc();
+      if(mem != 0){
+        pte_t *pte1 = walk1(pagetable, a, 1);
+        if(pte1 == 0){
+          superfree(mem);
+          uvmdealloc(pagetable, a, oldsz);
+          return 0;
+        }
+        if(*pte1 & PTE_V)
+          panic("uvmalloc: remap");
+        memset(mem, 0, SUPERPGSIZE);
+        *pte1 = PA2PTE(mem) | PTE_R | PTE_U | xperm | PTE_V;
+        step = SUPERPGSIZE;
+        continue;
+      }
+    }
+
+    // ordinary 4KB page
     mem = kalloc();
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
-#ifndef LAB_SYSCALL
-    memset(mem, 0, sz);
-#endif
-    if(mappages(pagetable, a, sz, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+    memset(mem, 0, PGSIZE);
+    if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
       kfree(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
@@ -279,7 +343,6 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   }
   return newsz;
 }
-
 // Deallocate user pages to bring the process size from oldsz to
 // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
 // need to be less than oldsz.  oldsz can be larger than the actual
@@ -289,7 +352,6 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
   if(newsz >= oldsz)
     return oldsz;
-
   if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
     int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
     uvmunmap(pagetable, PGROUNDUP(newsz), npages, 1);
