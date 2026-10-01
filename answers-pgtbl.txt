@@ -46,3 +46,24 @@ the process is reparented to init).
 uptime() could also be sped up if the kernel kept a tick counter on the
 shared page and refreshed it on timer interrupts. This costs more because
 the kernel has to update the page of every process on each tick.
+
+Part 3: vmprint
+
+The leaf entries printed by vmprint are the same pages that print_pgtbl showed,
+but vmprint prints the whole tree, including the upper-level entries that only
+point to the next-level page-table pages (those have no R/W/X bits).
+
+Leaf pages at the low addresses (0x0 - 0x4000):
+- 0x0 and 0x1000: program code (perm 0x5B / 0x1B: readable, executable, user).
+- 0x2000: global data (perm 0x17: readable, writable, user).
+- 0x3000: guard page (perm 0x07: no U bit, so user access faults).
+- 0x4000: user stack (perm 0xD7: readable, writable, user, accessed, dirty).
+
+Leaf pages at the high addresses (0x3fffffd000 - 0x3ffffff000):
+- 0x3fffffd000: the USYSCALL page (perm 0x13: read-only, user).
+- 0x3fffffe000: the trapframe (perm 0xC7: read/write, kernel-only).
+- 0x3ffffff000: the trampoline (perm 0x4B: executable, kernel-only).
+
+In print_pgtbl the addresses were shown as 32-bit (0xFFFFD000 etc.), because
+it prints only the lower bits. In vmprint the full 39-bit virtual addresses
+are shown (0x3fffffd000 etc.). The mappings and permissions are the same.
