@@ -1,0 +1,19 @@
+1. usertrap() (kernel/trap.c) called syscall().
+
+2. p->trapframe->a7 = 0x7, which is SYS_exec. This is the first system call
+   made by initcode.S (xv6 first user program), which calls exec(init, argv)
+   to load and run /init.
+
+3. sstatus = 0x200000022. Bit 8 (SPP) is 0, so the CPU was previously running
+   in User mode before the trap.
+
+4. Faulting instruction: 80001c82: lw a3,0(zero)
+   Register a3 corresponds to the variable num.
+
+5. scause = 0xd (13), a Load page fault. The instruction tries to read from
+   virtual address 0, which is deliberately left unmapped in the kernel
+   page table (Fig 3-3), so null-pointer dereferences fault immediately.
+   This matches scause=0xd.
+
+6. The process running at the time of the panic was named "initcode" with
+   pid 1, the first process created by xv6.
