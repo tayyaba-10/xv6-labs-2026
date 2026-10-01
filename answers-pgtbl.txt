@@ -1,0 +1,48 @@
+Lab: Page tables - Answers
+
+Part 1: Inspect a user-process page table
+
+va 0x0, perm 0x5B (V R X U A): The first page of the program's code (text).
+It is readable and executable by the user, but not writable.
+A is set because the CPU has already fetched instructions from it.
+
+va 0x1000, perm 0x1B (V R X U): The second page of program code. Same
+permissions as above, but A is not set because it has not been accessed yet.
+
+va 0x2000, perm 0x17 (V R W U): The program's global data. User can read and
+write it, but it has not been accessed yet.
+
+va 0x3000, perm 0x7 (V R W, no U): The guard page below the stack. The U bit
+is clear, so a user access to it causes a page fault. This catches stack
+overflows.
+
+va 0x4000, perm 0xD7 (V R W U A D): The user stack. It has been both read
+and written, so A and D are set.
+
+va 0x5000 to 0x9000, perm 0x0: Not mapped (V bit is 0). Unused address space
+(nothing allocated there)
+
+va 0xFFFF6000 to 0xFFFFD000, perm 0x0: Not mapped. Unused addresses below
+the trapframe. (After the ugetpid task, the page at USYSCALL shows up here
+as a read-only user page.)
+
+va 0xFFFFE000, perm 0xC7 (V R W A D, no U): The trapframe page. It stores
+the user registers during traps. The kernel can read and write it, but the
+user cannot access it.
+
+va 0xFFFFF000, perm 0x4B (V R X A, no U): The trampoline page. It holds the
+kernel's trap entry/exit code, mapped at the same address in every address
+space. It is executable but not accessible to user code.
+
+Part 2: Speed up system calls
+
+Which other system calls could use the shared page?
+
+getppid() could be sped up by storing the parent's PID in the struct
+usyscall, so the process reads it directly without entering the kernel. The
+kernel must update it if the parent changes (e.g. when the parent exits and
+the process is reparented to init).
+
+uptime() could also be sped up if the kernel kept a tick counter on the
+shared page and refreshed it on timer interrupts. This costs more because
+the kernel has to update the page of every process on each tick.
