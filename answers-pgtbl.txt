@@ -67,3 +67,11 @@ Leaf pages at the high addresses (0x3fffffd000 - 0x3ffffff000):
 In print_pgtbl the addresses were shown as 32-bit (0xFFFFD000 etc.), because
 it prints only the lower bits. In vmprint the full 39-bit virtual addresses
 are shown (0x3fffffd000 etc.). The mappings and permissions are the same.
+
+Part 4: Superpages
+
+Implemented 2MB superpages. kalloc.c reserves 8 chunks of 2MB (superalloc and
+superfree). uvmalloc uses a superpage when the address is 2MB aligned and at
+least 2MB remain, by writing a level-1 leaf PTE. uvmunmap frees a whole
+superpage, or demotes it into 512 ordinary pages if only part is unmapped.
+uvmcopy copies superpages on fork, and walk/walkaddr understand level-1 leaves.

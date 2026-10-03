@@ -158,7 +158,12 @@ walkaddr(pagetable_t pagetable, uint64 va)
 
   if(va >= MAXVA)
     return 0;
-
+  pte_t *pte1 = walk1(pagetable, va, 0);
+  if(pte1 && (*pte1 & PTE_V) && (*pte1 & (PTE_R|PTE_W|PTE_X))){
+    if((*pte1 & PTE_U) == 0)
+      return 0;
+    return PTE2PA(*pte1) + (va & (SUPERPGSIZE - 1));   // superpage
+  }
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
@@ -396,18 +401,37 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
+
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
-  uint64 pa, i;
+  uint64 pa, i, step;
   uint flags;
   char *mem;
-  int szinc;
 
-  for(i = 0; i < sz; i += szinc){
-    szinc = PGSIZE;
-    szinc = PGSIZE;
+  for(i = 0; i < sz; i += step){
+    step = PGSIZE;
+
+    // superpage in the parent?
+    pte_t *pte1 = walk1(old, i, 0);
+    if(pte1 && (*pte1 & PTE_V) && (*pte1 & (PTE_R|PTE_W|PTE_X))){
+      pa = PTE2PA(*pte1);
+      flags = PTE_FLAGS(*pte1);
+      if((mem = superalloc()) == 0)
+        goto err;
+      memmove(mem, (char*)pa, SUPERPGSIZE);
+      pte_t *npte1 = walk1(new, i, 1);
+      if(npte1 == 0){
+        superfree(mem);
+        goto err;
+      }
+      *npte1 = PA2PTE(mem) | flags;
+      step = SUPERPGSIZE;
+      continue;
+    }
+
+    // ordinary page
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
@@ -429,8 +453,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
-// mark a PTE invalid for user access.
-// used by exec for the user stack guard page.
 void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
