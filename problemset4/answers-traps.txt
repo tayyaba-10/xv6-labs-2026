@@ -1,0 +1,16 @@
+1. Arguments are passed in registers a0-a7. In main's call to printf, the value
+   13 is held in register a2.
+
+2. There is no call to f or g in main. The compiler inlined them and computed
+   f(8)+1 = 12 at compile time, so main just loads the constant 12 into a1.
+
+3. printf is located at address 0x06fe.
+
+4. ra holds the address of the instruction right after the jalr, which is 0x34.
+
+5. The output is: HE110 World
+   57616 in hex is E110, so %x prints e110. i = 0x00646c72 is stored little-endian as bytes 72 6c 64 00, which are the characters 'r' 'l' 'd' and the end marker,
+   so %s prints "rld".
+   On a big-endian machine, i would be 0x726c6400. 57616 would not change, because %x prints the number's value, not its bytes.
+
+6. It prints some unpredictable value after "y=". printf expects a second argument in register a2, but only one argument was passed, so it prints whatever garbage was left in a2.
