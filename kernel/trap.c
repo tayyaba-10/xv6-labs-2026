@@ -48,11 +48,9 @@ usertrap(void)
   struct proc *p = myproc();
   
   // save user program counter.
-  p->trapframe->epc = r_sepc();
-  
+  p->trapframe->epc = r_sepc();  
   if(r_scause() == 8){
     // system call
-
     if(killed(p))
       exit(-1);
 
@@ -61,10 +59,15 @@ usertrap(void)
     p->trapframe->epc += 4;
 
     // an interrupt will change sepc, scause, and sstatus,
-    // so enable only now that we're done with those registers.
+    // so enable interrupts only after we're done with those registers.
     intr_on();
 
     syscall();
+  } else if(r_scause() == 13 || r_scause() == 15){ // Load/Store page fault
+    uint64 va = r_stval();
+    if(cowfault(p->pagetable, va) < 0) {
+      setkilled(p);
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -81,6 +84,7 @@ usertrap(void)
     yield();
 
   usertrapret();
+
 }
 
 //

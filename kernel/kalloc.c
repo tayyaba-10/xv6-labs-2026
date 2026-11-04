@@ -14,6 +14,40 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+#define PA2INDEX(pa) (((uint64)(pa) - KERNBASE) / PGSIZE)
+#define MAX_PAGES   ((PHYSTOP - KERNBASE) / PGSIZE)
+
+struct {
+  struct spinlock lock;
+  int count[MAX_PAGES];
+} ref_cnt;
+
+void
+refcnt_init(void)
+{
+  initlock(&ref_cnt.lock, "ref_cnt");
+}
+
+void
+inc_ref(uint64 pa)
+{
+  if(pa < KERNBASE || pa >= PHYSTOP)
+    return;
+  acquire(&ref_cnt.lock);
+  ref_cnt.count[PA2INDEX(pa)]++;
+  release(&ref_cnt.lock);
+}
+
+int
+get_ref(uint64 pa)
+{
+  if(pa < KERNBASE || pa >= PHYSTOP)
+    return 0;
+  acquire(&ref_cnt.lock);
+  int c = ref_cnt.count[PA2INDEX(pa)];
+  release(&ref_cnt.lock);
+  return c;
+}
 struct run {
   struct run *next;
 };
@@ -27,6 +61,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  refcnt_init();
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -50,6 +85,16 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  acquire(&ref_cnt.lock);
+  int idx = PA2INDEX(pa);
+  if(ref_cnt.count[idx] > 1) {
+    ref_cnt.count[idx]--;
+    release(&ref_cnt.lock);
+    return;
+  }
+  ref_cnt.count[idx] = 0;
+  release(&ref_cnt.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -77,6 +122,11 @@ kalloc(void)
   release(&kmem.lock);
 
   if(r)
+    {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    acquire(&ref_cnt.lock);
+    ref_cnt.count[PA2INDEX(r)] = 1;
+    release(&ref_cnt.lock);
+  }
   return (void*)r;
 }
